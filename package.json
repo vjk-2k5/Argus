@@ -1,0 +1,15 @@
+{
+  "name": "argus",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.3.14",
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "dev:server": "bun --env-file .env --watch packages/server/src/index.ts",
+    "dev:web": "bun --cwd packages/web dev",
+    "typecheck": "bun --cwd packages/shared typecheck && bun --cwd packages/server typecheck && bun --cwd packages/web typecheck",
+    "build": "bun --cwd packages/web build",
+    "start": "bun --env-file .env packages/server/src/index.ts"
+  }
+}

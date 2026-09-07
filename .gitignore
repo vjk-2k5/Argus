@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.db
+*.db-shm
+*.db-wal
+*.tsbuildinfo
+packages/web/vite.config.js
+packages/web/vite.config.d.ts
+.env
+argus-auth.json
+.DS_Store
