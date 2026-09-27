@@ -1,0 +1,92 @@
+%% Argus — Three-Tier Architecture (monochrome / print version)
+%% Strict layer stack. Links exist only between vertically adjacent layers.
+%% Double-headed links carry request (down) and stream/response (up).
+%% Hierarchy is shown by stroke weight, not colour:
+%%   2px = tier container · 1px = component · dashed = external boundary
+
+%%{init: {"theme":"neutral","fontFamily":"arial, helvetica, sans-serif","themeVariables":{"fontFamily":"arial, helvetica, sans-serif","fontSize":"24px","textColor":"#000000","titleColor":"#000000","nodeTextColor":"#000000","primaryTextColor":"#000000","secondaryTextColor":"#000000","tertiaryTextColor":"#000000","lineColor":"#000000","edgeLabelBackground":"#ffffff","clusterBkg":"#ffffff","clusterBorder":"#000000"},"themeCSS":"text, tspan, .nodeLabel, .edgeLabel, .cluster-label { fill:#000000 !important; color:#000000 !important; font-family: arial, helvetica, sans-serif !important; } .edgeLabel rect { fill:#ffffff !important; opacity:1 !important; } .cluster-label text { font-weight:700 !important; }","flowchart":{"htmlLabels":false,"padding":18,"nodeSpacing":50,"rankSpacing":65,"curve":"basis"}} }%%
+flowchart TB
+
+  subgraph T1["TIER 1 · PRESENTATION — React + Vite :5173"]
+    direction TB
+    UI["Views<br/>session setup · frame editor<br/>round viewer · report"]
+    QC["Query cache<br/>sessions · session:id<br/>1.5s reconcile poll"]
+    NET["Transport<br/>REST client<br/>EventSource subscriber"]
+  end
+
+  subgraph T2["TIER 2 · SHARED CONTRACT — zod schemas, types for both tiers"]
+    direction TB
+    SC1["Request DTOs<br/>CreateSession · FrameUpdate"]
+    SC2["Stream protocol<br/>SessionEventData envelope"]
+    SC3["Agent protocol<br/>Frame · ObserverControl<br/>RoleConfigs · SessionStatus"]
+  end
+
+  subgraph T3A["TIER 3a · HTTP / SSE BOUNDARY — Bun + Hono :3001"]
+    direction TB
+    R1["Session routes<br/>create · read · delete"]
+    R2["Frame routes<br/>update · approve"]
+    R3["Lifecycle routes<br/>start · pause · resume · cancel"]
+    R4["Provider routes<br/>key · refresh"]
+    R5["Event stream<br/>SSE + heartbeat"]
+  end
+
+  subgraph T3B["TIER 3b · ORCHESTRATION"]
+    direction TB
+    FSM["Lifecycle FSM<br/>framing → awaiting_approval<br/>→ ready → running ⇄ paused<br/>→ completed / failed"]
+    subgraph LOOP["Debate loop"]
+      direction LR
+      LP1["Answer Agent turn"]
+      LP2["Observer turn<br/>criterion scoring"]
+      LP3["Verdict gate<br/>continue or finalize"]
+      LP1 --> LP2 --> LP3
+      LP3 -.->|"next round"| LP1
+    end
+    RUNTIME["Stream runtime<br/>text + reasoning deltas<br/>usage · abort per run"]
+    SUPPORT["Context compactor<br/>Prompt + policy layer<br/>Event publisher"]
+  end
+
+  subgraph T3C["TIER 3c · MODEL ACCESS"]
+    direction TB
+    MC["Credential store<br/>local file ▸ env"]
+    MR["Registry + discovery<br/>catalogs · context limits"]
+    MA["Provider adapters<br/>unified streaming"]
+  end
+
+  subgraph T4["DATA TIER · SQLite WAL + Drizzle"]
+    direction TB
+    D1[("session")]
+    D2[("message")]
+    D3[("compaction")]
+    D4["Boot recovery"]
+  end
+
+  EXT["EXTERNAL · model provider APIs"]
+
+  SEQ["SESSION SEQUENCE<br/>1 create · 2 auto-framing · 3 user approval · 4 debate rounds<br/>5 observer verdict · 6 final report · 7 pause / resume anytime"]
+
+  T1 <-->|"REST · SSE"| T2
+  T2 <-->|"validated payloads · typed events"| T3A
+  T3A <-->|"commands · lifecycle + stream events"| T3B
+  T3B -->|"inference"| T3C
+  T3B -->|"state"| T4
+  T3C -->|"HTTPS"| EXT
+
+  linkStyle default stroke:#000000,stroke-width:1.4px,color:#000000
+
+  classDef block fill:#ffffff,stroke:#000000,stroke-width:1px,color:#000000
+  classDef external fill:#ffffff,stroke:#000000,stroke-width:1px,stroke-dasharray:5 3,color:#000000
+  classDef note fill:#ffffff,stroke:#000000,stroke-width:1px,stroke-dasharray:2 2,color:#000000
+  classDef tier fill:#ffffff,stroke:#000000,stroke-width:2px,color:#000000
+  classDef innertier fill:#ffffff,stroke:#000000,stroke-width:1.5px,color:#000000
+
+  class UI,QC,NET block
+  class SC1,SC2,SC3 block
+  class R1,R2,R3,R4,R5 block
+  class FSM,RUNTIME,SUPPORT block
+  class LP1,LP2,LP3 block
+  class MC,MR,MA block
+  class D1,D2,D3,D4 block
+  class EXT external
+  class SEQ note
+  class T1,T2,T3A,T3B,T3C,T4 tier
+  class LOOP innertier

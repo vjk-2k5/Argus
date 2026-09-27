@@ -12,7 +12,7 @@ export const FrameSchema = z.object({
   objective: z.string().min(1),
   acceptanceCriteria: z.array(AcceptanceCriterionSchema).min(1).max(6),
   evidenceStandard: z.string().min(1),
-  maxRounds: z.number().int().min(1).max(20),
+  maxRounds: z.number().int().min(1),
 }).superRefine((frame, context) => {
   const seen = new Set<string>()
   frame.acceptanceCriteria.forEach((criterion, index) => {

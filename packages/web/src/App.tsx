@@ -76,7 +76,7 @@ function NewSession({ onCreated }: { onCreated: (id: string) => void }) {
             placeholder="Enter an open mathematical problem, research question, or organizational decision..." required />
         </label>
         <label>Maximum debate rounds
-          <input type="number" min={1} max={20} value={maxRounds}
+          <input type="number" min={1} value={maxRounds}
             onChange={(event) => setMaxRounds(Number(event.target.value))} required />
         </label>
         <div className="provider-strip">
@@ -170,7 +170,7 @@ function FrameEditor({ session }: { session: SessionDetailView }) {
       <div className="form-grid">
         <label>Evidence / proof standard<textarea className="short" value={draft.evidenceStandard}
           onChange={(event) => set("evidenceStandard", event.target.value)} required /></label>
-        <label>Maximum rounds<input type="number" min={1} max={20} value={draft.maxRounds}
+        <label>Maximum rounds<input type="number" min={1} value={draft.maxRounds}
           onChange={(event) => set("maxRounds", Number(event.target.value))} /></label>
       </div>
       {(save.error || approve.error) && <p className="error">{errorText(save.error ?? approve.error)}</p>}

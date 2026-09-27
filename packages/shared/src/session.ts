@@ -6,7 +6,7 @@ export const CreateSessionSchema = z.object({
   problem: z.string().min(1),
   title: z.string().min(1).max(200).optional(),
   roles: RoleConfigsSchema,
-  maxRounds: z.number().int().min(1).max(20).default(6),
+  maxRounds: z.number().int().min(1).default(6),
 })
 export type CreateSessionInput = z.infer<typeof CreateSessionSchema>
 
