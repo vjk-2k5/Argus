@@ -7,13 +7,38 @@ import type {
   RoleModelConfig,
   SessionStatus,
   SseEventEnvelope,
+  ToolAccess as SharedToolAccess,
+  ToolDescriptor as SharedToolDescriptor,
+  Part as SharedPart,
+  ToolInvocation as SharedToolInvocation,
+  ToolInvocationState,
+  ToolName,
 } from "@argus/shared";
 
 export type AgentRole = "framer" | "answerer" | "observer";
 export type DebateRole = Exclude<AgentRole, "framer">;
 export type RoleModel = RoleModelConfig;
-export type CreateSessionInput = SharedCreateSessionInput;
+export type CreateSessionInput = Omit<SharedCreateSessionInput, "toolAccess"> & { toolAccess: ToolAccess };
 export type EventEnvelope = SseEventEnvelope;
+export type ToolAccess = SharedToolAccess;
+export type ToolInvocation = SharedToolInvocation;
+export type ToolInvocationView = SharedToolInvocation & { state: ToolInvocationState };
+export type ToolDescriptorView = SharedToolDescriptor;
+export type { ToolName };
+
+export interface ToolCatalogView {
+  tools: ToolDescriptorView[];
+  sessionsRoot: string;
+  shell: string;
+}
+
+export interface DirectoryListingView {
+  path: string;
+  parent: string | null;
+  directories: Array<{ name: string; path: string }>;
+  roots: string[];
+  error?: string;
+}
 
 export interface ModelMetadataView {
   id: string;
@@ -51,6 +76,9 @@ export interface MessageView {
   createdAt: number;
   completedAt: number | null;
 }
+/** One piece of a turn in the order the model produced it: reasoning, a tool call, or prose. */
+export type PartView = SharedPart;
+
 export interface CompactionView {
   id: string;
   sessionId: string;
@@ -69,6 +97,7 @@ export interface SessionSummaryView {
   status: SessionStatus;
   currentRound: number;
   maxRounds: number;
+  toolAccess: ToolAccess;
   createdAt: number;
   updatedAt: number;
   error?: string | null;
@@ -78,6 +107,8 @@ export interface SessionDetailView extends SessionSummaryView {
   roles: RoleConfigs;
   frame?: FrameView;
   frameApproved: boolean;
+  toolAccess: ToolAccess;
+  workspace: string;
   messages: MessageView[];
   compactions: CompactionView[];
   usage: {

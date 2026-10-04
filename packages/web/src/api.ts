@@ -1,9 +1,12 @@
 import type { Frame } from "@argus/shared";
 import type {
   CreateSessionInput,
+  DirectoryListingView,
   ProviderResponseView,
   SessionDetailView,
   SessionSummaryView,
+  ToolAccess,
+  ToolCatalogView,
 } from "./types";
 
 const API = "/api";
@@ -29,6 +32,22 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function getProviders() {
   return request<ProviderResponseView>("/providers");
+}
+
+export function getTools() {
+  return request<ToolCatalogView>("/tools");
+}
+
+export function getDirectories(path?: string) {
+  const query = path ? `?path=${encodeURIComponent(path)}` : "";
+  return request<DirectoryListingView>(`/fs/directories${query}`);
+}
+
+export function updateSessionTools(id: string, toolAccess: ToolAccess) {
+  return request<SessionDetailView>(`/sessions/${encodeURIComponent(id)}/tools`, {
+    method: "PUT",
+    body: JSON.stringify({ toolAccess }),
+  });
 }
 
 export async function getSessions() {

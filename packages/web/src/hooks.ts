@@ -1,6 +1,13 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { EventEnvelope, MessageView, SessionDetailView, SseEventView } from "./types";
+import type {
+  EventEnvelope,
+  MessageView,
+  PartView,
+  SessionDetailView,
+  SseEventView,
+  ToolInvocation,
+} from "./types";
 
 function placeholder(envelope: EventEnvelope): MessageView | undefined {
   const event = envelope.event;
@@ -19,6 +26,44 @@ function placeholder(envelope: EventEnvelope): MessageView | undefined {
     createdAt: Date.now(),
     completedAt: null,
   };
+}
+
+function toolCallsOf(message: MessageView): ToolInvocation[] {
+  const metadata = message.metadata as Record<string, unknown> | undefined;
+  const calls = metadata?.toolCalls;
+  return Array.isArray(calls) ? (calls as ToolInvocation[]) : [];
+}
+
+function partsOf(message: MessageView): PartView[] {
+  const metadata = message.metadata as Record<string, unknown> | undefined;
+  const parts = metadata?.parts;
+  return Array.isArray(parts) ? (parts as PartView[]) : [];
+}
+
+function withParts(message: MessageView, parts: PartView[]): MessageView {
+  return { ...message, metadata: { ...(message.metadata as object), parts } };
+}
+
+function withTool(message: MessageView, tool: ToolInvocation): MessageView {
+  const calls = toolCallsOf(message);
+  const index = calls.findIndex((item) => item.id === tool.id);
+  const next = index < 0 ? [...calls, tool] : calls.map((item, at) => (at === index ? tool : item));
+  return { ...message, metadata: { ...(message.metadata as object), toolCalls: next } };
+}
+
+function startPart(message: MessageView, partId: string, kind: PartView["kind"], toolId?: string): MessageView {
+  const parts = partsOf(message);
+  if (parts.some((part) => part.id === partId)) return message;
+  return withParts(message, [...parts, { id: partId, kind, text: "", ...(toolId ? { toolId } : {}) }]);
+}
+
+function appendPartDelta(message: MessageView, partId: string, delta: string): MessageView {
+  const parts = partsOf(message);
+  const index = parts.findIndex((part) => part.id === partId);
+  if (index < 0) return message;
+  const partsNext = [...parts];
+  partsNext[index] = { ...parts[index], text: parts[index].text + delta };
+  return withParts(message, partsNext);
 }
 
 export function useSessionEvents(sessionID?: string) {
@@ -40,11 +85,15 @@ export function useSessionEvents(sessionID?: string) {
       } catch {
         return;
       }
+      const event = envelope?.event;
+      if (!event || typeof event !== "object") return;
       setLastEvent({ envelope, receivedAt: Date.now() });
-      const event = envelope.event;
       queryClient.setQueryData<SessionDetailView>(key, (current) => {
         if (!current) return current;
         if (event.type === "session.status") return { ...current, status: event.status };
+        if (event.type === "session.tools") {
+          return { ...current, toolAccess: event.toolAccess, workspace: event.workspace };
+        }
         if (event.type === "frame.updated") {
           return { ...current, frame: { ...event.frame, approved: event.approved }, frameApproved: event.approved };
         }
@@ -53,13 +102,51 @@ export function useSessionEvents(sessionID?: string) {
           if (current.messages.some((item) => item.id === event.messageId)) return current;
           return { ...current, messages: [...current.messages, placeholder(envelope)!] };
         }
+        if (event.type === "part.started") {
+          return {
+            ...current,
+            messages: current.messages.map((item) => item.id !== event.messageId ? item
+              : startPart(item, event.partId, event.kind)),
+          };
+        }
         if (event.type === "part.delta") {
           return {
             ...current,
             messages: current.messages.map((item) => item.id !== event.messageId ? item : {
-              ...item,
-              [event.kind]: item[event.kind] + event.delta,
+              ...appendPartDelta(item, event.partId, event.delta),
+              [event.kind]: (event.kind === "text" ? item.text : item.reasoning) + event.delta,
             }),
+          };
+        }
+        if (event.type === "turn.cut") {
+          return {
+            ...current,
+            messages: current.messages.map((item) => item.id !== event.messageId ? item
+              : { ...item, metadata: { ...(item.metadata as object), cut: event.reason } }),
+          };
+        }
+        if (event.type === "tool.updated") {          return {
+            ...current,
+            messages: current.messages.map((item) =>
+              item.id !== event.messageId ? item : withTool(item, event.tool)),
+          };
+        }
+        if (event.type === "question.asked") {
+          return {
+            ...current,
+            messages: current.messages.map((item) =>
+              item.id !== event.messageId
+                ? item
+                : withTool(item, {
+                  id: `${event.messageId}:question:${event.question}`,
+                  name: "question",
+                  state: "completed",
+                  arguments: { question: event.question, options: event.options },
+                  title: event.question,
+                  output: `Asked the user: ${event.question}`,
+                  startedAt: Date.now(),
+                  endedAt: Date.now(),
+                })),
           };
         }
         if (event.type === "usage.updated") {
@@ -91,7 +178,7 @@ export function useSessionEvents(sessionID?: string) {
       if (event.type === "message.completed" || event.type === "session.status") {
         void queryClient.invalidateQueries({ queryKey: key });
       }
-      if (["session.status", "frame.updated", "final.report", "error"].includes(event.type)) {
+      if (["session.status", "frame.updated", "final.report", "error", "session.tools"].includes(event.type)) {
         void queryClient.invalidateQueries({ queryKey: ["sessions"] });
       }
     };

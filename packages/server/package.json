@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@ai-sdk/amazon-bedrock": "4.0.190",
     "@ai-sdk/anthropic": "3.0.111",
     "@ai-sdk/google": "3.0.73",
     "@ai-sdk/openai": "3.0.84",

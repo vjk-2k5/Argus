@@ -2,7 +2,7 @@ import { Database as SQLite } from "bun:sqlite"
 import { and, asc, desc, eq } from "drizzle-orm"
 import { drizzle } from "drizzle-orm/bun-sqlite"
 import { index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core"
-import type { Frame, RoleConfigs, SessionStatus } from "@argus/shared"
+import type { Frame, RoleConfigs, SessionStatus, ToolAccess } from "@argus/shared"
 
 export const sessions = sqliteTable("session", {
   id: text().primaryKey(),
@@ -14,6 +14,8 @@ export const sessions = sqliteTable("session", {
   roles: text({ mode: "json" }).$type<RoleConfigs>().notNull(),
   frame: text({ mode: "json" }).$type<Frame>(),
   frameApproved: integer("frame_approved", { mode: "boolean" }).notNull().default(false),
+  toolAccess: text("tool_access").$type<ToolAccess>().notNull().default("full"),
+  workspace: text().notNull().default(""),
   inputTokens: integer("input_tokens").notNull().default(0),
   outputTokens: integer("output_tokens").notNull().default(0),
   costUsd: real("cost_usd").notNull().default(0),
@@ -58,7 +60,8 @@ CREATE TABLE IF NOT EXISTS session (
   max_rounds INTEGER NOT NULL, current_round INTEGER NOT NULL DEFAULT 0, roles TEXT NOT NULL,
   frame TEXT, frame_approved INTEGER NOT NULL DEFAULT 0, input_tokens INTEGER NOT NULL DEFAULT 0,
   output_tokens INTEGER NOT NULL DEFAULT 0, cost_usd REAL NOT NULL DEFAULT 0, final_report TEXT,
-  error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+  error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+  tool_access TEXT NOT NULL DEFAULT 'full', workspace TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS message (
   id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES session(id) ON DELETE CASCADE,
@@ -77,6 +80,22 @@ CREATE TABLE IF NOT EXISTS compaction (
 CREATE INDEX IF NOT EXISTS compaction_session_idx ON compaction(session_id, created_at);
 `)
 
+/** Additive migration so databases created before Phase 2 keep working. */
+function addMissingColumns(table: string, columns: Array<[string, string]>) {
+  const existing = new Set(
+    (sqlite.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((column) => column.name),
+  )
+  for (const [name, definition] of columns) {
+    if (existing.has(name)) continue
+    sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`)
+  }
+}
+
+addMissingColumns("session", [
+  ["tool_access", "TEXT NOT NULL DEFAULT 'full'"],
+  ["workspace", "TEXT NOT NULL DEFAULT ''"],
+])
+
 export const db = drizzle({ client: sqlite })
 export type SessionRow = typeof sessions.$inferSelect
 export type MessageRow = typeof messages.$inferSelect
@@ -88,6 +107,8 @@ export function createSession(input: {
   problem: string
   maxRounds: number
   roles: RoleConfigs
+  toolAccess: ToolAccess
+  workspace: string
 }) {
   const now = Date.now()
   db.insert(sessions).values({
@@ -113,7 +134,9 @@ export function listSessions() {
 }
 
 export function deleteSession(id: string) {
-  return db.delete(sessions).where(eq(sessions.id, id)).run().changes > 0
+  if (!getSession(id)) return false
+  db.delete(sessions).where(eq(sessions.id, id)).run()
+  return true
 }
 
 export function recoverInterruptedSessions() {
@@ -188,13 +211,17 @@ export function listMessages(sessionId: string) {
   return db.select().from(messages).where(eq(messages.sessionId, sessionId)).orderBy(asc(messages.createdAt), asc(messages.id)).all()
 }
 
+/**
+ * The most recent completed turn for a role in a round. A round holds several messages for a
+ * role once a cut turn is continued, so this returns the last one rather than the only one.
+ */
 export function completedMessage(sessionId: string, round: number, role: "answerer" | "observer") {
   return db.select().from(messages).where(and(
     eq(messages.sessionId, sessionId),
     eq(messages.round, round),
     eq(messages.role, role),
     eq(messages.status, "completed"),
-  )).orderBy(desc(messages.createdAt)).get()
+  )).orderBy(desc(messages.createdAt), desc(messages.id)).get()
 }
 
 export function addUsage(sessionId: string, input: number, output: number, cost: number) {

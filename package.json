@@ -9,6 +9,7 @@
     "dev:server": "bun --env-file .env --watch packages/server/src/index.ts",
     "dev:web": "bun --cwd packages/web dev",
     "typecheck": "bun --cwd packages/shared typecheck && bun --cwd packages/server typecheck && bun --cwd packages/web typecheck",
+    "test": "bun test packages/server",
     "build": "bun --cwd packages/web build",
     "start": "bun --env-file .env packages/server/src/index.ts"
   }

@@ -5,7 +5,7 @@ export const JsonValueSchema: z.ZodType<unknown> = z.lazy(() =>
 )
 export type JsonValue = z.infer<typeof JsonValueSchema>
 
-export const ProviderIdSchema = z.enum(["openai", "anthropic", "google", "openrouter", "openai-compatible"])
+export const ProviderIdSchema = z.enum(["openai", "anthropic", "google", "openrouter", "openai-compatible", "bedrock"])
 export type ProviderId = z.infer<typeof ProviderIdSchema>
 
 export const RoleModelConfigSchema = z.object({

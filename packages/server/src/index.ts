@@ -1,7 +1,7 @@
 import { Hono } from "hono"
 import { cors } from "hono/cors"
 import { streamSSE } from "hono/streaming"
-import { CreateSessionSchema, FrameApprovalSchema, FrameUpdateSchema } from "@argus/shared"
+import { CreateSessionSchema, FrameApprovalSchema, FrameUpdateSchema, ToolAccessSchema } from "@argus/shared"
 import {
   createSession,
   deleteSession,
@@ -21,6 +21,9 @@ import {
   providerViews,
   verifyProviderCredential,
 } from "./providers"
+import { filesystemRoots, listFilesystemDirectory, resolveWorkspaceDirectory, sessionsRoot, workspaceFor } from "./tools/fs"
+import { shellName } from "./tools/shell"
+import { toolDescriptors } from "./tools/registry"
 import type { ProviderId } from "@argus/shared"
 
 const app = new Hono()
@@ -44,7 +47,7 @@ function view(id: string) {
       currency: "USD",
     },
     finalReport: detail.finalReport ? { text: detail.finalReport } : undefined,
-    unverifiedModelClaims: true,
+    unverifiedModelClaims: detail.toolAccess !== "off",
   }
 }
 
@@ -73,12 +76,10 @@ app.put("/api/providers/:id/key", async (c) => {
     return error(c, 400, "VALIDATION_ERROR", "key must be a non-empty string")
   }
   const normalizedKey = key.trim()
-  if (id === "openrouter" || id === "google") {
-    try {
-      await verifyProviderCredential(id, normalizedKey)
-    } catch {
-      return error(c, 400, "CREDENTIAL_VERIFICATION_FAILED", "Provider credential verification failed")
-    }
+  try {
+    await verifyProviderCredential(id, normalizedKey)
+  } catch {
+    return error(c, 400, "CREDENTIAL_VERIFICATION_FAILED", "Provider credential verification failed")
   }
   try {
     await setStoredCredential(id, normalizedKey)
@@ -121,19 +122,60 @@ app.post("/api/providers/:id/refresh", async (c) => {
 
 app.get("/api/sessions", (c) => c.json({ sessions: listSessions() }))
 
+app.get("/api/tools", (c) => c.json({ tools: toolDescriptors(), sessionsRoot: sessionsRoot(), shell: shellName() }))
+
+app.get("/api/fs/directories", async (c) => {
+  try {
+    const listing = await listFilesystemDirectory(c.req.query("path"))
+    return c.json({ ...listing, roots: await filesystemRoots() })
+  } catch (cause) {
+    return error(c, 400, "INVALID_PATH", cause instanceof Error ? cause.message : String(cause))
+  }
+})
+
 app.post("/api/sessions", async (c) => {
   const parsed = CreateSessionSchema.safeParse(await c.req.json().catch(() => undefined))
   if (!parsed.success) return error(c, 400, "VALIDATION_ERROR", parsed.error.message)
   const id = crypto.randomUUID()
+  const title = parsed.data.title ?? parsed.data.problem.slice(0, 100)
+  let workspace = ""
+  if (parsed.data.workspace || parsed.data.toolAccess !== "off") {
+    try {
+      workspace = await resolveWorkspaceDirectory(parsed.data.workspace)
+        ?? workspaceFor(title, parsed.data.problem, id)
+    } catch (cause) {
+      return error(c, 400, "INVALID_WORKSPACE", cause instanceof Error ? cause.message : String(cause))
+    }
+  }
   createSession({
     id,
-    title: parsed.data.title ?? parsed.data.problem.slice(0, 100),
+    title,
     problem: parsed.data.problem,
     maxRounds: parsed.data.maxRounds,
     roles: parsed.data.roles,
+    toolAccess: parsed.data.toolAccess,
+    workspace,
   })
   queueMicrotask(() => void frameSession(id))
   return c.json(view(id), 201)
+})
+
+app.put("/api/sessions/:id/tools", async (c) => {
+  const id = c.req.param("id")
+  const session = getSession(id)
+  if (!session) return error(c, 404, "NOT_FOUND", "Session not found")
+  if (["completed", "cancelled", "failed"].includes(session.status)) {
+    return error(c, 409, "INVALID_STATE", `Tool access cannot be changed on a ${session.status} session`)
+  }
+  const body: unknown = await c.req.json().catch(() => undefined)
+  const access = ToolAccessSchema.safeParse(
+    body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>).toolAccess : undefined,
+  )
+  if (!access.success) return error(c, 400, "VALIDATION_ERROR", "toolAccess must be off, read, or full")
+  const workspace = access.data === "off" ? session.workspace : (session.workspace || workspaceFor(session.title, session.problem, id))
+  updateSession(id, { toolAccess: access.data, workspace })
+  publish(id, { type: "session.tools", toolAccess: access.data, workspace })
+  return c.json(view(id))
 })
 
 app.get("/api/sessions/:id", (c) => {
@@ -242,7 +284,7 @@ app.get("/api/sessions/:id/events", (c) => {
       event: { type: "session.status", status: session.status },
     }) })
     while (open) {
-      await stream.sleep(15_000)
+      await stream.sleep(10_000)
       if (open) await stream.writeSSE({ event: "ping", data: String(Date.now()) })
     }
   })
@@ -257,5 +299,7 @@ app.onError((cause, c) => {
 const port = Number(process.env.ARGUS_PORT ?? 3001)
 const hostname = process.env.ARGUS_HOST?.trim() || "127.0.0.1"
 recoverInterruptedSessions()
-Bun.serve({ port, hostname, fetch: app.fetch })
+// SSE event streams stay silent while a model thinks or a tool runs, which regularly exceeds
+// Bun's 10s default. Disable the idle timeout so long debates are not disconnected mid-round.
+Bun.serve({ port, hostname, fetch: app.fetch, idleTimeout: 0 })
 console.log(`Argus server listening on http://${hostname}:${port}`)

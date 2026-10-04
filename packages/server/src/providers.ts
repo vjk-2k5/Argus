@@ -1,3 +1,4 @@
+import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock"
 import { createAnthropic } from "@ai-sdk/anthropic"
 import { createGoogleGenerativeAI } from "@ai-sdk/google"
 import { createOpenAI } from "@ai-sdk/openai"
@@ -40,6 +41,10 @@ interface ProviderDefinition {
   defaultModelID: string
   fallbackModels: string[]
   modelsEnv: string
+  /** A single model chosen by an environment variable, taking precedence over `defaultModelID`. */
+  defaultModelEnv?: string
+  /** Extra environment variable this provider needs alongside its credential before it can be used. */
+  requiresEnv?: string
 }
 
 const definitions: ProviderDefinition[] = [
@@ -47,16 +52,36 @@ const definitions: ProviderDefinition[] = [
   { id: "anthropic", name: "Anthropic", defaultModelID: "claude-sonnet-4-5", fallbackModels: ["claude-sonnet-4-5", "claude-opus-4-1"], modelsEnv: "ARGUS_ANTHROPIC_MODELS" },
   { id: "google", name: "Google AI Studio", defaultModelID: "gemini-2.5-pro", fallbackModels: ["gemini-2.5-pro", "gemini-2.5-flash"], modelsEnv: "ARGUS_GOOGLE_MODELS" },
   { id: "openrouter", name: "OpenRouter", defaultModelID: "openai/gpt-5", fallbackModels: ["openai/gpt-5", "anthropic/claude-sonnet-4.5"], modelsEnv: "ARGUS_OPENROUTER_MODELS" },
-  { id: "openai-compatible", name: "OpenAI compatible", defaultModelID: "default", fallbackModels: ["default"], modelsEnv: "ARGUS_OPENAI_COMPATIBLE_MODELS" },
+  { id: "openai-compatible", name: "OpenAI compatible", defaultModelID: "default", fallbackModels: ["default"], modelsEnv: "ARGUS_OPENAI_COMPATIBLE_MODELS", requiresEnv: "ARGUS_OPENAI_COMPATIBLE_BASE_URL" },
+  {
+    id: "bedrock",
+    name: "AWS Bedrock",
+    defaultModelID: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    fallbackModels: [
+      "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "us.amazon.nova-pro-v1:0",
+    ],
+    modelsEnv: "ARGUS_BEDROCK_MODELS",
+    defaultModelEnv: "BEDROCK_MODEL",
+    requiresEnv: "AWS_REGION",
+  },
 ]
 
 const cacheLifetimeMs = 5 * 60 * 1000
 
 export const isProviderId = isKnownProviderId
 
+function defaultModelOf(definition: ProviderDefinition) {
+  return process.env[definition.defaultModelEnv ?? ""]?.trim() || undefined
+}
+
 function fallbackModels(definition: ProviderDefinition) {
   const override = process.env[definition.modelsEnv]?.split(",").map((model) => model.trim()).filter(Boolean)
-  return [...new Set(override?.length ? override : definition.fallbackModels)]
+  const base = [...override?.length ? override : definition.fallbackModels]
+  const preferred = defaultModelOf(definition)
+  if (preferred && !base.includes(preferred)) base.unshift(preferred)
+  return [...new Set(base)]
 }
 function uniqueSorted(models: string[]) {
   return [...new Set(models.map((model) => model.trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b))
@@ -68,6 +93,18 @@ function positiveNumber(value: unknown) {
 
 function optionalName(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined
+}
+
+/** Walks a chain of object keys, returning undefined the moment the path is not an object. */
+function recordAt(source: Record<string, unknown>, ...keys: string[]): Record<string, unknown> | undefined {
+  let current: Record<string, unknown> | undefined = source
+  for (const key of keys) {
+    if (!current) return undefined
+    const next = current[key]
+    if (!next || typeof next !== "object" || Array.isArray(next)) return undefined
+    current = next as Record<string, unknown>
+  }
+  return current
 }
 
 function metadataRecord(models: string[], metadata: ModelMetadata[] = []): ModelMetadataRecord {
@@ -186,8 +223,94 @@ async function discoverGoogle(key: string): Promise<DiscoveredModels> {
   return { models, modelMetadata: metadataRecord(models, metadata) }
 }
 
-async function discoverWithKey(id: "openrouter" | "google", key: string) {
-  return id === "openrouter" ? discoverOpenRouter(key) : discoverGoogle(key)
+/**
+ * Bedrock exposes two catalogs: the foundation models available in the region, and the
+ * cross-region inference profiles (`us.` / `global.` prefixed) that actually spread a request
+ * across regions. Both are invocable model IDs, so both belong in the picker.
+ */
+async function discoverBedrock(key: string): Promise<DiscoveredModels> {
+  const region = requireValue(process.env.AWS_REGION, "AWS_REGION")
+  const endpoint = `https://bedrock.${region}.amazonaws.com`
+  const auth = { Authorization: `Bearer ${key}` }
+  const foundation = await fetchJson(`${endpoint}/foundation-models?byOutputModality=TEXT`, auth, "AWS Bedrock")
+  // Reading the profile catalog needs a second permission, so a key that can list models but not
+  // profiles still yields a usable picker instead of falling back to nothing.
+  const profiles = await fetchJson(`${endpoint}/inference-profiles`, auth, "AWS Bedrock").catch(() => undefined)
+
+  const summaries = foundation && typeof foundation === "object" && !Array.isArray(foundation)
+    ? (foundation as Record<string, unknown>).modelSummaries
+    : undefined
+  if (!Array.isArray(summaries)) throw new Error("AWS Bedrock model discovery returned an invalid model list")
+
+  const metadata: ModelMetadata[] = []
+  for (const item of summaries) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue
+    const model = item as Record<string, unknown>
+    // Argus always streams through the Converse API, so a model that cannot stream Converse
+    // is unusable here even though Bedrock lists it.
+    const converse = recordAt(model, "inferenceAPIsSupported", "converse")
+    if (converse?.streaming !== true) continue
+    const id = typeof model.modelId === "string" ? model.modelId.trim() : ""
+    if (!id) continue
+    const name = optionalName(model.modelName)
+    const provider = optionalName(model.providerName)
+    const maxOutputTokens = positiveNumber(recordAt(model, "converse")?.maxTokensMaximum)
+    metadata.push({
+      id,
+      ...(name ? { name: provider ? `${name} · ${provider}` : name } : {}),
+      ...(maxOutputTokens ? { maxOutputTokens } : {}),
+    })
+  }
+
+  const profileList = profiles && typeof profiles === "object" && !Array.isArray(profiles)
+    ? (profiles as Record<string, unknown>).inferenceProfileSummaries
+    : undefined
+  if (Array.isArray(profileList)) {
+    // A profile carries no output ceiling of its own, but it names the foundation model it routes
+    // to, so the cap can be inherited and the orchestrator can still bound a turn.
+    const byModelId = new Map(metadata.map((model) => [model.id, model]))
+    for (const item of profileList) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue
+      const profile = item as Record<string, unknown>
+      const id = typeof profile.inferenceProfileId === "string" ? profile.inferenceProfileId.trim() : ""
+      if (!id) continue
+      if (typeof profile.status === "string" && profile.status !== "ACTIVE") continue
+      const name = optionalName(profile.inferenceProfileName)
+      const maxOutputTokens = profileTargets(profile)
+        .map((modelId) => byModelId.get(modelId)?.maxOutputTokens)
+        .find((value): value is number => value !== undefined)
+      metadata.push({
+        id,
+        ...(name ? { name } : {}),
+        ...(maxOutputTokens ? { maxOutputTokens } : {}),
+      })
+    }
+  }
+
+  const models = uniqueSorted(metadata.map((model) => model.id))
+  if (!models.length) throw new Error("AWS Bedrock model discovery returned no Converse-capable models")
+  return { models, modelMetadata: metadataRecord(models, metadata) }
+}
+
+/** Pulls the foundation-model IDs out of an inference profile's `modelArn` entries. */
+function profileTargets(profile: Record<string, unknown>) {
+  if (!Array.isArray(profile.models)) return []
+  return profile.models.flatMap((entry): string[] => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return []
+    const arn = (entry as Record<string, unknown>).modelArn
+    if (typeof arn !== "string") return []
+    const modelId = arn.split("/").pop()?.trim()
+    return modelId ? [modelId] : []
+  })
+}
+
+const discoverableProviders = new Set<ProviderId>(["openrouter", "google", "bedrock"])
+type DiscoverableProviderId = "openrouter" | "google" | "bedrock"
+
+async function discoverWithKey(id: DiscoverableProviderId, key: string) {
+  if (id === "openrouter") return discoverOpenRouter(key)
+  if (id === "google") return discoverGoogle(key)
+  return discoverBedrock(key)
 }
 
 interface DiscoveryResult extends DiscoveredModels {
@@ -207,13 +330,13 @@ export function invalidateProviderCache(id?: ProviderId) {
 }
 
 export async function verifyProviderCredential(id: ProviderId, key: string) {
-  if (id === "openrouter" || id === "google") await discoverWithKey(id, key)
+  if (discoverableProviders.has(id)) await discoverWithKey(id as DiscoverableProviderId, key)
 }
 
 async function discover(definition: ProviderDefinition, force: boolean): Promise<DiscoveryResult> {
   const fallback = fallbackModels(definition)
   const fallbackMetadata = metadataRecord(fallback)
-  if (definition.id !== "openrouter" && definition.id !== "google") {
+  if (!discoverableProviders.has(definition.id)) {
     return { models: fallback, modelMetadata: fallbackMetadata, modelSource: "fallback" }
   }
   if (!hasProviderCredential(definition.id)) {
@@ -227,7 +350,7 @@ async function discover(definition: ProviderDefinition, force: boolean): Promise
   }
 
   try {
-    const pending = withProviderCredential(definition.id, (key) => discoverWithKey(definition.id as "openrouter" | "google", key))
+    const pending = withProviderCredential(definition.id, (key) => discoverWithKey(definition.id as DiscoverableProviderId, key))
     if (!pending) return { models: fallback, modelMetadata: fallbackMetadata, modelSource: "fallback" }
     const discovered = await pending
     const result: DiscoveryResult = { ...discovered, modelSource: "api" }
@@ -244,12 +367,12 @@ async function discover(definition: ProviderDefinition, force: boolean): Promise
 }
 async function providerView(definition: ProviderDefinition, force: boolean): Promise<ProviderView> {
   const discovered = await discover(definition, force)
-  const defaultModelID = discovered.models.includes(definition.defaultModelID)
-    ? definition.defaultModelID
-    : discovered.models[0] ?? definition.defaultModelID
-  const configured = definition.id === "openai-compatible"
-    ? hasProviderCredential(definition.id) && Boolean(process.env.ARGUS_OPENAI_COMPATIBLE_BASE_URL?.trim())
-    : hasProviderCredential(definition.id)
+  const defaultModelID = defaultModelOf(definition)
+    ?? (discovered.models.includes(definition.defaultModelID)
+      ? definition.defaultModelID
+      : discovered.models[0] ?? definition.defaultModelID)
+  const configured = hasProviderCredential(definition.id)
+    && (!definition.requiresEnv || Boolean(process.env[definition.requiresEnv]?.trim()))
   return {
     id: definition.id,
     name: definition.name,
@@ -310,6 +433,11 @@ export function resolveModel(config: RoleModelConfig): any {
         name: "argus-compatible",
         baseURL: requireValue(process.env.ARGUS_OPENAI_COMPATIBLE_BASE_URL, "ARGUS_OPENAI_COMPATIBLE_BASE_URL"),
         apiKey,
+      })(config.modelID))
+    case "bedrock":
+      return requireProviderCredential("bedrock", "AWS_BEARER_TOKEN_BEDROCK", (apiKey) => createAmazonBedrock({
+        apiKey,
+        region: requireValue(process.env.AWS_REGION, "AWS_REGION"),
       })(config.modelID))
   }
 }

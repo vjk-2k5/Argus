@@ -15,7 +15,7 @@ export function Markdown({ children, className = "" }: MarkdownProps) {
       remarkPlugins={[remarkGfm, remarkMath]}
       rehypePlugins={[rehypeKatex]}
       components={{
-        table: ({ node: _node, ...props }) => <div className="markdown-table-scroll"><table {...props} /></div>,
+        table: ({ node: _node, ...props }) => <div className="md-table"><table {...props} /></div>,
       }}
     >
       {children}

@@ -1,12 +1,16 @@
 import { z } from "zod"
 import { JsonValueSchema, RoleConfigsSchema } from "./common"
 import { PartKindSchema, SessionStatusSchema } from "./events"
+import { ToolAccessSchema } from "./tools"
 
 export const CreateSessionSchema = z.object({
   problem: z.string().min(1),
   title: z.string().min(1).max(200).optional(),
   roles: RoleConfigsSchema,
   maxRounds: z.number().int().min(1).default(6),
+  toolAccess: ToolAccessSchema.default("full"),
+  /** Optional existing directory the agents work in. Blank selects a fresh per-session folder. */
+  workspace: z.string().max(4096).optional(),
 })
 export type CreateSessionInput = z.infer<typeof CreateSessionSchema>
 

@@ -8,7 +8,7 @@ export type CredentialSource = "stored" | "environment" | null
 
 type StoredCredentials = Partial<Record<ProviderId, string>>
 
-const providerIds = ["openai", "anthropic", "google", "openrouter", "openai-compatible"] as const satisfies readonly ProviderId[]
+const providerIds = ["openai", "anthropic", "google", "openrouter", "openai-compatible", "bedrock"] as const satisfies readonly ProviderId[]
 const providerIdSet = new Set<string>(providerIds)
 const environmentVariables: Record<ProviderId, string> = {
   openai: "OPENAI_API_KEY",
@@ -16,6 +16,7 @@ const environmentVariables: Record<ProviderId, string> = {
   google: "GOOGLE_GENERATIVE_AI_API_KEY",
   openrouter: "OPENROUTER_API_KEY",
   "openai-compatible": "ARGUS_OPENAI_COMPATIBLE_API_KEY",
+  bedrock: "AWS_BEARER_TOKEN_BEDROCK",
 }
 
 function credentialPath() {
