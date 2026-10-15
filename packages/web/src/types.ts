@@ -131,6 +131,23 @@ export interface ProviderResponseView {
   defaults: RoleConfigs;
 }
 
+export interface RoleRecommendationView {
+  providerID: ProviderId;
+  modelID: string;
+  description: string | null;
+  probability: number;
+  confidence: number;
+  alternatives: Array<{ providerID: ProviderId; modelID: string; probability: number }>;
+}
+
+export interface RecommendationView {
+  model: string;
+  usage: { inputTokens: number; outputTokens: number };
+  candidatesConsidered: number;
+  truncated: boolean;
+  roles: Record<AgentRole, RoleRecommendationView>;
+}
+
 export interface SseEventView {
   envelope: EventEnvelope;
   receivedAt: number;

@@ -387,6 +387,11 @@ button.danger:hover:not(:disabled) { background: #241713; color: #e08a6c; border
 .model-line .limits { font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); }
 .model-line button { align-self: center; }
 
+/* ─── jev recommendations ────────────────────────────────────────────────── */
+
+.jev-recs { display: grid; gap: 0; margin-top: 10px; }
+.jev-recs .model-line > span:nth-child(2) { display: grid; gap: 2px; }
+
 /* ─── session header ───────────────────────────────────────────────────── */
 
 .session-head {

@@ -13,6 +13,12 @@ export interface Ruling {
 const VERDICT_WORD = { met: "verified", not_met: "not met" } as const;
 const VERDICT_CLASS = { met: "met", not_met: "not_met" } as const;
 
+/** Criterion ids are machine keys ("AC-2"); people read them as "Acceptance criteria 2". */
+export function criterionLabel(id: string): string {
+  const match = /^ac[- ]?(\d+)$/i.exec(id.trim());
+  return match ? `Acceptance criteria ${match[1]}` : id;
+}
+
 /** Latest Observer ruling per criterion, taken from each observer message's control block. */
 export function rulingsOf(messages: MessageView[]): Ruling[] {
   const latest = new Map<string, Ruling>();

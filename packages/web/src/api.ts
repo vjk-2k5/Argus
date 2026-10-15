@@ -3,6 +3,7 @@ import type {
   CreateSessionInput,
   DirectoryListingView,
   ProviderResponseView,
+  RecommendationView,
   SessionDetailView,
   SessionSummaryView,
   ToolAccess,
@@ -67,6 +68,13 @@ export function createSession(input: CreateSessionInput) {
   return request<SessionDetailView>("/sessions", {
     method: "POST",
     body: JSON.stringify(input),
+  });
+}
+
+export function recommendModels(problem: string) {
+  return request<RecommendationView>("/router/recommend", {
+    method: "POST",
+    body: JSON.stringify({ problem }),
   });
 }
 

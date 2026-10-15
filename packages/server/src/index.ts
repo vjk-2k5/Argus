@@ -21,6 +21,7 @@ import {
   providerViews,
   verifyProviderCredential,
 } from "./providers"
+import { recommendModels, RouterError } from "./router"
 import { filesystemRoots, listFilesystemDirectory, resolveWorkspaceDirectory, sessionsRoot, workspaceFor } from "./tools/fs"
 import { shellName } from "./tools/shell"
 import { toolDescriptors } from "./tools/registry"
@@ -123,6 +124,20 @@ app.post("/api/providers/:id/refresh", async (c) => {
 app.get("/api/sessions", (c) => c.json({ sessions: listSessions() }))
 
 app.get("/api/tools", (c) => c.json({ tools: toolDescriptors(), sessionsRoot: sessionsRoot(), shell: shellName() }))
+
+app.post("/api/router/recommend", async (c) => {
+  const body: unknown = await c.req.json().catch(() => undefined)
+  const problem = body && typeof body === "object" && !Array.isArray(body)
+    ? (body as Record<string, unknown>).problem
+    : undefined
+  if (typeof problem !== "string") return error(c, 400, "VALIDATION_ERROR", "problem must be a string")
+  try {
+    return c.json(await recommendModels(problem))
+  } catch (cause) {
+    if (cause instanceof RouterError) return error(c, cause.status, cause.code, cause.message)
+    return error(c, 502, "ROUTER_REQUEST_FAILED", cause instanceof Error ? cause.message : "Recommendation failed")
+  }
+})
 
 app.get("/api/fs/directories", async (c) => {
   try {

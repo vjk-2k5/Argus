@@ -11,6 +11,7 @@ import {
   getSessions,
   getTools,
   pauseSession,
+  recommendModels,
   resumeSession,
   startSession,
   updateFrame,
@@ -20,12 +21,16 @@ import { useSessionEvents } from "./hooks";
 import { ProviderSettings } from "./ProviderSettings";
 import { DirectoryPicker } from "./DirectoryPicker";
 import { ModelPicker } from "./ModelPicker";
+import { RouterRecommend } from "./RouterRecommend";
 import { Markdown } from "./Markdown";
 import { ToolCall, ToolCallList, toolCallsOf } from "./ToolCall";
 import { VerdictStrip, rulingsOf } from "./Ledger";import type {
+  AgentRole,
   FrameView,
   MessageView,
+  RecommendationView,
   RoleModel,
+  RoleRecommendationView,
   SessionDetailView,
   ToolAccess,
   ToolInvocationView,
@@ -111,30 +116,34 @@ function Intro({ onCreated }: { onCreated: (id: string) => void }) {
     });
   };
 
+  const applyRecommendation = (role: AgentRole, value: RoleModel) => {
+    if (role === "framer") setFramer(value);
+    if (role === "answerer") setAnswerer(value);
+    if (role === "observer") setObserver(value);
+    setPerRole(true);
+  };
+  const applyAllRecommendations = (roles: Record<AgentRole, RoleModel>) => {
+    setFramer(roles.framer);
+    setAnswerer(roles.answerer);
+    setObserver(roles.observer);
+    const same = roles.framer.providerID === roles.answerer.providerID
+      && roles.framer.modelID === roles.answerer.modelID
+      && roles.answerer.providerID === roles.observer.providerID
+      && roles.answerer.modelID === roles.observer.modelID;
+    setPerRole(!same);
+  };
+
   const enabled = tools.data?.tools.filter((item) => toolAccess === "full" || item.access === "read") ?? [];
   const writes = enabled.filter((item) => item.mutating);
   const reads = enabled.filter((item) => !item.mutating);
+
   const connected = providers.data?.providers.filter((item) => item.configured).length ?? 0;
   const allProviders = providers.data?.providers ?? [];
 
   return <div className="intro">
     <div className="intro-statement">
       <h1>One model answers. The other tries to break it.</h1>
-      <p>Argus turns a loose problem into a bounded task before any agent starts working on it.</p>
-      <dl className="roles">
-        <div>
-          <dt>Task Framer</dt>
-          <dd>Writes the scope, the deliverables, and the acceptance criteria. You read them and approve or edit them.</dd>
-        </div>
-        <div>
-          <dt>Answer Agent</dt>
-          <dd>Works the problem, and has to produce something that satisfies every criterion at once.</dd>
-        </div>
-        <div>
-          <dt>Observer</dt>
-          <dd>Re-derives each criterion with its own tools, then rules it met or not met with a reason. It cannot take the Answer Agent's word.</dd>
-        </div>
-      </dl>
+      <p>Describe the problem. You approve the criteria before anything runs.</p>
     </div>
 
     <form className="intro-form" onSubmit={submit}>
@@ -185,6 +194,9 @@ function Intro({ onCreated }: { onCreated: (id: string) => void }) {
                   onChange={(value) => { setFramer(value); setAnswerer(value); setObserver(value); }} />}
             </div>
 
+            <RouterRecommend problem={problem} providers={allProviders}
+              onApply={applyRecommendation} onApplyAll={applyAllRecommendations} />
+
             <div className="plain-row">
               <div>
                 <span className="label">Providers</span>
@@ -222,8 +234,8 @@ function Intro({ onCreated }: { onCreated: (id: string) => void }) {
               </span>
             </div>
             <p className="faint" style={{ fontSize: 13 }}>
-              Give the agents an existing folder to work in — it becomes the only place they can read and write.
-              Leave it blank and Argus creates a fresh folder under <code className="mono">{tools.data?.sessionsRoot ?? "the sessions root"}</code>.
+              Only this folder can be read or written. Leave it blank and Argus creates one under{" "}
+              <code className="mono">{tools.data?.sessionsRoot ?? "the sessions root"}</code>.
             </p>
           </div>}
 
@@ -685,13 +697,6 @@ function SessionView({ id, onReading }: { id: string; onReading: (reading: boole
 
           : stage === "final" && value.finalReport ? <div className="split-pane">
             <article className="report">
-              <div className={`ending ${value.finalReport.terminationKind === "criteria_met" ? "met" : "open"}`}>
-                <b>{value.finalReport.terminationKind === "criteria_met" ? "Closed on the criteria" : "Stopped at the round limit"}</b>
-                {value.finalReport.terminationReason && <p>{value.finalReport.terminationReason}</p>}
-              </div>
-              {value.unverifiedModelClaims && <p className="flag">
-                <b>Some claims were never checked.</b> The agents asserted them without a tool call behind them. Treat those parts as unverified.
-              </p>}
               <Markdown>{value.finalReport.text}</Markdown>
             </article>
           </div>
